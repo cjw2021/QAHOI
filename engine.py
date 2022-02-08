@@ -116,7 +116,7 @@ def evaluate_hoi(dataset_file, model, postprocessors, data_loader, subject_categ
     # torch.save(preds[:50], "preds.pt")
     # torch.save(gts[:50], "gts.pt")
 
-    evaluator = HICOEvaluator(preds, gts, "./data/hico_20160224_det/", out_dir, epoch, use_nms=args.use_nms, nms_thresh=args.nms_thresh)
+    evaluator = HICOEvaluator(preds, gts, args.hico_path, out_dir, epoch, use_nms=args.use_nms, nms_thresh=args.nms_thresh)
 
     stats = evaluator.evaluation_default()
     stats_ko = evaluator.evaluation_ko()
