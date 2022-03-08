@@ -19,7 +19,9 @@ import torch
 import util.misc as utils
 
 from datasets.hico_eval import HICOEvaluator
+from datasets.vcoco_eval import VCOCOEvaluator
 
+from loguru import logger
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
@@ -68,10 +70,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         if max_norm > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
 
-
         optimizer.step()
-
-
 
         metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
         if hasattr(criterion, 'loss_labels'):
@@ -81,7 +80,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
-    print("Averaged stats:", metric_logger)
+    if utils.get_rank() == 0:
+        logger.info("\nAveraged stats: {}".format(metric_logger))
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
@@ -113,15 +113,22 @@ def evaluate_hoi(dataset_file, model, postprocessors, data_loader, subject_categ
     _, indices = np.unique(img_ids, return_index=True)
     preds = [img_preds for i, img_preds in enumerate(preds) if i in indices]
     gts = [img_gts for i, img_gts in enumerate(gts) if i in indices]
-    # torch.save(preds[:50], "preds.pt")
-    # torch.save(gts[:50], "gts.pt")
 
-    evaluator = HICOEvaluator(preds, gts, "./data/hico_20160224_det/", out_dir, epoch, use_nms=args.use_nms, nms_thresh=args.nms_thresh)
+    if dataset_file == 'hico':
+        evaluator = HICOEvaluator(preds, gts, args.hoi_path, out_dir, epoch, use_nms=args.use_nms, nms_thresh=args.nms_thresh)
 
-    stats = evaluator.evaluation_default()
-    stats_ko = evaluator.evaluation_ko()
-    stats.update(stats_ko)
-    if args.eval_extra:
-        evaluator.evaluation_extra()
+        rank = utils.get_rank()
+        stats = evaluator.evaluation_default()
+        if rank == 0:
+            logger.info('\n--------------------\ndefault mAP: {}\ndefault mAP rare: {}\ndefault mAP non-rare: {}\n--------------------'.format(stats['mAP_def'], stats['mAP_def_rare'], stats['mAP_def_non_rare']))
+        stats_ko = evaluator.evaluation_ko()
+        if rank == 0:
+            logger.info('\n--------------------\nko mAP: {}\nko mAP rare: {}\nko mAP non-rare: {}\n--------------------'.format(stats_ko['mAP_ko'], stats_ko['mAP_ko_rare'], stats_ko['mAP_ko_non_rare']))
+        stats.update(stats_ko)
+        if args.eval_extra:
+            evaluator.evaluation_extra()
+    elif dataset_file == 'vcoco':
+        evaluator = VCOCOEvaluator(preds, gts, subject_category_id, data_loader.dataset.correct_mat, use_nms=args.use_nms, nms_thresh=args.nms_thresh)
+        stats = evaluator.evaluate()
 
     return stats

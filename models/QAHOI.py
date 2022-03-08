@@ -60,8 +60,8 @@ def _get_clones(module, N):
 
 class QAHOI(nn.Module):
     """ This is the Deformable DETR module that performs object detection """
-    def __init__(self, backbone, transformer, num_classes, num_verb_classes, num_queries, num_feature_levels,
-                 aux_loss=True):
+    def __init__(self, backbone, transformer, num_classes, num_verb_classes, num_queries, num_feature_levels, aux_loss=True,
+                 no_obj=False):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -74,7 +74,7 @@ class QAHOI(nn.Module):
         self.num_queries = num_queries
         self.transformer = transformer
         hidden_dim = transformer.d_model
-        self.class_embed = nn.Linear(hidden_dim, num_classes)
+        self.class_embed = nn.Linear(hidden_dim, num_classes) if not no_obj else nn.Linear(hidden_dim, num_classes + 1)
         self.verb_class_embed = nn.Linear(hidden_dim, num_verb_classes)
         self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
         self.sub_bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
@@ -107,7 +107,10 @@ class QAHOI(nn.Module):
 
         prior_prob = 0.01
         bias_value = -math.log((1 - prior_prob) / prior_prob)
-        self.class_embed.bias.data = torch.ones(num_classes) * bias_value
+        if not no_obj:
+            self.class_embed.bias.data = torch.ones(num_classes) * bias_value
+        else:
+            self.class_embed.bias.data = torch.ones(num_classes + 1) * bias_value
         self.verb_class_embed.bias.data = torch.ones(num_verb_classes) * bias_value
         nn.init.constant_(self.bbox_embed.layers[-1].weight.data, 0)
         nn.init.constant_(self.bbox_embed.layers[-1].bias.data, 0)
@@ -223,7 +226,8 @@ class QAHOI(nn.Module):
 
 class SetCriterionHOI(nn.Module):
 
-    def __init__(self, num_obj_classes, num_queries, num_verb_classes, matcher, weight_dict, eos_coef, losses, focal_alpha=0.25):
+    def __init__(self, num_obj_classes, num_queries, num_verb_classes, matcher, weight_dict, eos_coef, losses, focal_alpha=0.25,
+                 no_obj=False):
         super().__init__()
         self.num_obj_classes = num_obj_classes
         self.num_queries = num_queries
@@ -233,6 +237,12 @@ class SetCriterionHOI(nn.Module):
         self.eos_coef = eos_coef
         self.losses = losses
         self.focal_alpha = focal_alpha
+        self.no_obj = no_obj
+
+        if self.no_obj:
+            empty_weight = torch.ones(self.num_obj_classes + 1)
+            empty_weight[-1] = self.eos_coef
+            self.register_buffer('empty_weight', empty_weight)
 
     def loss_obj_labels(self, outputs, targets, indices, num_interactions, log=True):
         assert 'pred_obj_logits' in outputs
@@ -244,13 +254,16 @@ class SetCriterionHOI(nn.Module):
                                     dtype=torch.int64, device=src_logits.device)
         target_classes[idx] = target_classes_o
 
-        target_classes_onehot = torch.zeros([src_logits.shape[0], src_logits.shape[1], src_logits.shape[2] + 1],
-                                            dtype=src_logits.dtype, layout=src_logits.layout, device=src_logits.device)
-        target_classes_onehot.scatter_(2, target_classes.unsqueeze(-1), 1)
+        if not self.no_obj:
+            target_classes_onehot = torch.zeros([src_logits.shape[0], src_logits.shape[1], src_logits.shape[2] + 1],
+                                                dtype=src_logits.dtype, layout=src_logits.layout, device=src_logits.device)
+            target_classes_onehot.scatter_(2, target_classes.unsqueeze(-1), 1)
 
-        target_classes_onehot = target_classes_onehot[:,:,:-1]
-        loss_obj_ce = sigmoid_focal_loss(src_logits, target_classes_onehot, num_interactions, alpha=self.focal_alpha, gamma=2) * src_logits.shape[1]
-        
+            target_classes_onehot = target_classes_onehot[:,:,:-1]
+            loss_obj_ce = sigmoid_focal_loss(src_logits, target_classes_onehot, num_interactions, alpha=self.focal_alpha, gamma=2) * src_logits.shape[1]
+        else:
+            loss_obj_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight)
+
         losses = {'loss_obj_ce': loss_obj_ce}
 
         if log:
@@ -404,9 +417,10 @@ class SetCriterionHOI(nn.Module):
 
 class PostProcessHOI(nn.Module):
 
-    def __init__(self, subject_category_id):
+    def __init__(self, subject_category_id, no_obj=False):
         super().__init__()
         self.subject_category_id = subject_category_id
+        self.no_obj = no_obj
 
     @torch.no_grad()
     def forward(self, outputs, target_sizes):
@@ -422,15 +436,19 @@ class PostProcessHOI(nn.Module):
 
         obj_prob = F.softmax(out_obj_logits, -1)
         verb_scores = out_verb_logits.sigmoid()
+        num_verb_classes = verb_scores.shape[-1]
         
         # top 100
-        topk_values, topk_indexes = torch.topk(obj_prob.view(out_obj_logits.shape[0], -1), 100, dim=1)
+        obj_prob_class_all = obj_prob[:, :, :-1] if self.no_obj else obj_prob
+        num_obj_classes = obj_prob_class_all.shape[-1]
+
+        topk_values, topk_indexes = torch.topk(obj_prob_class_all.flatten(1), 100, dim=1)
         obj_scores = topk_values
-        topk_boxes = topk_indexes // out_obj_logits.shape[2]
-        obj_labels = topk_indexes % out_obj_logits.shape[2]
+        topk_boxes = topk_indexes // num_obj_classes
+        obj_labels = topk_indexes % num_obj_classes
 
         # top 100
-        verb_scores = torch.gather(verb_scores, 1, topk_boxes.unsqueeze(-1).repeat(1,1,117))
+        verb_scores = torch.gather(verb_scores, 1, topk_boxes.unsqueeze(-1).repeat(1,1,num_verb_classes))
         out_obj_boxes = torch.gather(out_obj_boxes, 1, topk_boxes.unsqueeze(-1).repeat(1,1,4))
         out_sub_boxes = torch.gather(out_sub_boxes, 1, topk_boxes.unsqueeze(-1).repeat(1,1,4))
 
@@ -488,7 +506,8 @@ def build(args):
         num_verb_classes=args.num_verb_classes,
         num_queries=args.num_queries,
         num_feature_levels=args.num_feature_levels,
-        aux_loss=args.aux_loss
+        aux_loss=args.aux_loss,
+        no_obj=args.no_obj
     )
     matcher = build_matcher(args)
     weight_dict = {}
@@ -509,8 +528,9 @@ def build(args):
     losses = ['obj_labels', 'verb_labels', 'sub_obj_boxes', 'obj_cardinality']
         
     criterion = SetCriterionHOI(args.num_obj_classes, args.num_queries, args.num_verb_classes, matcher=matcher,
-                                weight_dict=weight_dict, eos_coef=args.eos_coef, losses=losses)
+                                weight_dict=weight_dict, eos_coef=args.eos_coef, losses=losses,
+                                no_obj=args.no_obj)
     criterion.to(device)
-    postprocessors = {'hoi': PostProcessHOI(args.subject_category_id)}
+    postprocessors = {'hoi': PostProcessHOI(args.subject_category_id, no_obj=args.no_obj)}
 
     return model, criterion, postprocessors

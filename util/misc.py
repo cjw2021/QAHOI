@@ -25,6 +25,8 @@ import torch.nn as nn
 import torch.distributed as dist
 from torch import Tensor
 
+from loguru import logger
+
 # needed due to empty tensor bug in pytorch and torchvision 0.5
 import torchvision
 if float(torchvision.__version__[:3]) < 0.5:
@@ -240,6 +242,7 @@ class MetricLogger(object):
 
     def log_every(self, iterable, print_freq, header=None):
         i = 0
+        save_freq = 500 if "Test" in header else 100
         if not header:
             header = ''
         start_time = time.time()
@@ -275,11 +278,15 @@ class MetricLogger(object):
                 eta_seconds = iter_time.global_avg * (len(iterable) - i)
                 eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
                 if torch.cuda.is_available():
-                    print(log_msg.format(
+                    print_txt = log_msg.format(
                         i, len(iterable), eta=eta_string,
                         meters=str(self),
                         time=str(iter_time), data=str(data_time),
-                        memory=torch.cuda.max_memory_allocated() / MB))
+                        memory=torch.cuda.max_memory_allocated() / MB)
+                    if i % save_freq == 0 and get_rank() == 0:
+                        logger.info("\n"+print_txt)
+                    else:
+                        print(print_txt)
                 else:
                     print(log_msg.format(
                         i, len(iterable), eta=eta_string,

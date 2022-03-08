@@ -354,10 +354,6 @@ class HICOEvaluator():
         mAP['mAP_rare'] = map_rare / count_rare
         mAP['mAP_non_rare'] = map_non_rare / count_non_rare
 
-        print('--------------------')
-        print('default mAP: {}\ndefault mAP rare: {}\ndefault mAP non-rare: {}'.format(mAP['mAP'], mAP['mAP_rare'], mAP['mAP_non_rare']))
-        print('--------------------')
-
         mAP_json = os.path.join(
             self.out_dir,
             f'epo_{self.epoch}_mAP_default.json')
@@ -404,10 +400,6 @@ class HICOEvaluator():
         # print(count_rare, count_non_rare)
         mAP['mAP_rare'] = map_rare / count_rare
         mAP['mAP_non_rare'] = map_non_rare / count_non_rare
-
-        print('--------------------')
-        print('ko mAP: {}\nko mAP rare: {}\nko mAP non-rare: {}'.format(mAP['mAP'], mAP['mAP_rare'], mAP['mAP_non_rare']))
-        print('--------------------')
 
         mAP_json = os.path.join(
             self.out_dir,

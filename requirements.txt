@@ -1,3 +1,5 @@
 cython
 pycocotools
 scipy
+loguru
+tabulate

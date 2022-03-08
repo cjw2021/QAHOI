@@ -19,13 +19,14 @@ from util.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
 
 class HungarianMatcherHOI(nn.Module):
 
-    def __init__(self, cost_obj_class: float = 1, cost_verb_class: float = 1, cost_bbox: float = 1,
-                 cost_giou: float = 1):
+    def __init__(self, cost_obj_class: float = 1, cost_verb_class: float = 1, cost_bbox: float = 1, cost_giou: float = 1,
+                 no_obj: bool = False):
         super().__init__()
         self.cost_obj_class = cost_obj_class
         self.cost_verb_class = cost_verb_class
         self.cost_bbox = cost_bbox
         self.cost_giou = cost_giou
+        self.no_obj = no_obj
         assert cost_obj_class != 0 or cost_verb_class != 0 or cost_bbox != 0 or cost_giou != 0, 'all costs cant be 0'
 
     @torch.no_grad()
@@ -43,11 +44,14 @@ class HungarianMatcherHOI(nn.Module):
         tgt_sub_boxes = torch.cat([v['sub_boxes'] for v in targets])
         tgt_obj_boxes = torch.cat([v['obj_boxes'] for v in targets])
 
-        alpha = 0.25
-        gamma = 2.0
-        neg_cost_class = (1 - alpha) * (out_obj_prob ** gamma) * (-(1 - out_obj_prob + 1e-8).log())
-        pos_cost_class = alpha * ((1 - out_obj_prob) ** gamma) * (-(out_obj_prob + 1e-8).log())
-        cost_obj_class = pos_cost_class[:, tgt_obj_labels] - neg_cost_class[:, tgt_obj_labels]
+        if not self.no_obj:
+            alpha = 0.25
+            gamma = 2.0
+            neg_cost_class = (1 - alpha) * (out_obj_prob ** gamma) * (-(1 - out_obj_prob + 1e-8).log())
+            pos_cost_class = alpha * ((1 - out_obj_prob) ** gamma) * (-(out_obj_prob + 1e-8).log())
+            cost_obj_class = pos_cost_class[:, tgt_obj_labels] - neg_cost_class[:, tgt_obj_labels]
+        else:
+            cost_obj_class = -out_obj_prob[:, tgt_obj_labels]
 
         tgt_verb_labels_permute = tgt_verb_labels.permute(1, 0)
         cost_verb_class = -(out_verb_prob.matmul(tgt_verb_labels_permute) / \
@@ -81,4 +85,5 @@ class HungarianMatcherHOI(nn.Module):
 
 def build_matcher(args):
     return HungarianMatcherHOI(cost_obj_class=args.set_cost_obj_class, cost_verb_class=args.set_cost_verb_class,
-                               cost_bbox=args.set_cost_bbox, cost_giou=args.set_cost_giou)
+                               cost_bbox=args.set_cost_bbox, cost_giou=args.set_cost_giou,
+                               no_obj=args.no_obj)

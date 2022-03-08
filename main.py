@@ -28,9 +28,14 @@ from datasets import build_dataset
 from engine import train_one_epoch, evaluate_hoi
 from models import build_model
 
+from loguru import logger
+from tabulate import tabulate
+from util.logger import setup_logger, log_first_n
+from util.collect_env import collect_env_info
+
 
 def get_args_parser():
-    parser = argparse.ArgumentParser('Deformable DETR Detector', add_help=False)
+    parser = argparse.ArgumentParser('QAHOI', add_help=False)
     parser.add_argument('--lr', default=1e-4, type=float)
     parser.add_argument('--lr_backbone_names', default=["backbone.0"], type=str, nargs='+')
     parser.add_argument('--lr_backbone', default=1e-5, type=float)
@@ -45,6 +50,8 @@ def get_args_parser():
                         help='gradient clipping max norm')
     parser.add_argument('--nms_thresh', default=0.5, type=float)
     parser.add_argument('--use_checkpoint', action='store_true')
+
+    parser.add_argument('--no_obj', action='store_true')
 
     # Model parameters
     parser.add_argument('--frozen_weights', type=str, default=None,
@@ -150,8 +157,15 @@ def match_name_keywords(n, name_keywords):
     return out
 
 
+@logger.catch
 def main(args):
     utils.init_distributed_mode(args)
+    if args.output_dir and utils.get_rank() == 0:
+        setup_logger(args.output_dir, distributed_rank=0)  # master only
+        log_first_n("INFO", "Training log of QAHOI", key="message")
+        logger.info("\n{}".format(collect_env_info()))
+        logger.info("\n{}".format(tabulate([(k, v) for k,v in vars(args).items()])))
+
     print("git:\n  {}\n".format(utils.get_sha()))
 
     if args.frozen_weights is not None:
@@ -168,6 +182,9 @@ def main(args):
 
     model, criterion, postprocessors = build_model(args)
     model.to(device)
+
+    if args.output_dir and utils.get_rank() == 0:
+        logger.info("\n{}".format(model))
 
     model_without_ddp = model
     if args.distributed:
@@ -286,11 +303,12 @@ def main(args):
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-    print('Training time {}'.format(total_time_str))
+    if utils.get_rank() == 0:
+        logger.info('\nTraining time {}'.format(total_time_str))
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser('Deformable DETR training and evaluation script', parents=[get_args_parser()])
+    parser = argparse.ArgumentParser('QAHOI training and evaluation script', parents=[get_args_parser()])
     args = parser.parse_args()
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)

@@ -8,6 +8,8 @@ QAHOI: Query-Based Anchors for Human-Object Interaction Detection ([paper](https
 
 - PyTorch >= 1.5.1
 - torchvision >= 0.6.1
+- loguru (log training process and env info)
+  - tabulate (format log info)
 
 ```bash
 pip install -r requirements.txt
@@ -24,9 +26,11 @@ python test.py
 
 ## Dataset Preparation
 
+### HICO-DET
+
 Please follow the HICO-DET dataset preparation of [GGNet](https://github.com/SherlockHolmes221/GGNet).
 
-After preparation, the `data` folder as follows:
+After preparation, the `data/hico_20160224_det` folder as follows:
 
 ```bash
 data
@@ -44,7 +48,34 @@ data
 |       └── trainval_hico.json
 ```
 
+### V-COCO
+
+Please follow the installation of [V-COCO](https://github.com/s-gupta/v-coco).
+
+For evaluation, please put `vcoco_test.ids` and `vcoco_test.json` into `data/v-coco/data` folder.
+
+After preparation, the `data/v-coco` folder as follows:
+
+```bash
+data
+├── v-coco
+|   ├── prior.pickle
+|   ├── images
+|   |   ├── train2014
+|   |   └── val2014
+|   ├── data
+|   |   ├── instances_vcoco_all_2014.json
+|   |   ├── vcoco_test.ids
+|   |   └── vcoco_test.json
+|   └── annotations
+|       ├── corre_vcoco.npy
+|       ├── test_vcoco.json
+|       └── trainval_vcoco.json
+```
+
 ## Evaluation
+
+We currently provide results on HICO-DET.
 
 Download the model to `params` folder.
 - We test the model with NVIDIA A6000 GPU, Pytorch 1.9.0, Python 3.8 and CUDA 11.2.
@@ -80,6 +111,10 @@ python main.py --resume params/QAHOI_swin_large_384_22k_mul3.pth --backbone swin
 ```
 
 ## Training
+
+- `--no_obj`: BCE loss for the object label
+
+### HICO-DET
 
 Download the pre-trained swin-tiny model from [Swin-Transformer](https://github.com/microsoft/Swin-Transformer) to `params` folder.
 
@@ -128,6 +163,53 @@ python -m torch.distributed.launch \
         --num_feature_levels 3 \
         --num_queries 300 \
         --use_nms
+```
+
+### V-COCO
+
+```bash
+python -m torch.distributed.launch \
+        --nproc_per_node=8 \
+        --use_env main.py \
+        --backbone [backbone_name] \
+        --output_dir logs/[log_path] \
+        --epochs 150 --lr_drop 120 \
+        --num_feature_levels 3 \
+        --num_queries 300 \
+        --dataset_file vcoco \
+        --hoi_path data/v-coco \
+        --num_obj_classes 81 \
+        --num_verb_classes 29 \
+        --use_nms [--no_obj]
+```
+
+- Train ResNet-50
+
+```bash
+python -m torch.distributed.launch --nproc_per_node=8 --use_env main.py --backbone swin_tiny --pretrained params/swin_tiny_patch4_window7_224.pth --output_dir logs/swin_tiny_mul3_vcoco --epochs 150 --lr_drop 120 --num_feature_levels 3 --num_queries 300 --dataset_file vcoco --hoi_path data/v-coco --num_obj_classes 81 --num_verb_classes 29 --use_nms --no_obj
+```
+
+- Evaluation of V-COCO
+
+Please generate the detection at first.
+
+```bash
+python generate_vcoco_official.py \
+        --resume [checkpoint.pth] \
+        --save_path vcoco.pickle \
+        --hoi_path data/v-coco \
+        --dataset_file vcoco \
+        --backbone [backbone_name] \
+        --num_feature_level 3 \
+        --num_obj_classes 81 \
+        --num_verb_classes 29 \
+        --use_nms [--no_obj]
+```
+
+Then, using the official code to evaluate.
+
+```bash
+python vsrl_eval.py --vcoco_path data/v-coco --detections vcoco.pickle
 ```
 
 ## Citation
